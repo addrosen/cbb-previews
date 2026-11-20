@@ -176,6 +176,7 @@ const POWER = new Set(["B10", "B12", "SEC", "ACC", "BE", "P12", "A10", "Big Ten"
 let STORE = {};
 try { STORE = JSON.parse(localStorage.getItem("cbbp") || "{}"); } catch (e) { STORE = {}; }
 STORE.pins = STORE.pins || {};
+delete STORE.q;      // the search box no longer carries over between visits
 function save() { try { localStorage.setItem("cbbp", JSON.stringify(STORE)); } catch (e) {} }
 const slugify = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
@@ -340,8 +341,9 @@ function showSlate() {
     <div class="picker">
       <div class="field"><label>Day</label><div class="seg" id="days">${days.map(d => `<button aria-pressed="${d === STORE.day}">${esc(d)}</button>`).join("")}</div></div>
       <div class="field"><label>Conference</label><select id="conf"><option value="power">Your 7 conferences</option><option value="all">All D1</option>${confs.map(c => `<option>${esc(c)}</option>`).join("")}</select></div>
-      <div class="field"><label>Team</label><input type="search" id="q" placeholder="Search" value="${esc(STORE.q || "")}"></div>
+      <div class="field"><label>Team</label><input type="search" id="q" placeholder="Search" value="${esc(CBBP.q || "")}"></div>
     </div>
+    <div class="pad small dim" id="count"></div>
     <div class="games" id="list"></div></div>`;
   $("#conf").value = confs.includes(f) || f === "all" || f === "power" ? f : "power";
   const draw = () => {
@@ -353,12 +355,16 @@ function showSlate() {
       if (fc !== "power" && fc !== "all" && !cs.includes(fc)) return false;
       return !q || (g.home + " " + g.away).toLowerCase().includes(q);
     });
+    const dayAll = games.filter(g => localDay(g.start) === STORE.day).length;
+    const hidden = dayAll - list.length;
+    $("#count").innerHTML = `${list.length} of ${dayAll} games${hidden ? ` · ${hidden} hidden by ${[fc !== "all" ? (fc === "power" ? "the conference filter" : fc) : "", q ? `the search "${esc(q)}"` : ""].filter(Boolean).join(" and ")} <button class="tlink" id="clr">show all</button>` : ""}`;
+    const clr = $("#clr"); if (clr) clr.onclick = () => { CBBP.q = ""; STORE.filter = "all"; save(); showSlate(); };
     $("#list").innerHTML = list.length ? list.map(gameRow).join("") : `<div class="empty">No games match.</div>`;
     wireRows($("#list"), list);
   };
   $("#days").querySelectorAll("button").forEach(b => b.onclick = () => { STORE.day = b.textContent; save(); showSlate(); });
   $("#conf").onchange = () => { STORE.filter = $("#conf").value; save(); draw(); };
-  $("#q").oninput = () => { STORE.q = $("#q").value; save(); draw(); };
+  $("#q").oninput = () => { CBBP.q = $("#q").value; draw(); };
   draw();
 }
 function showMine() {
@@ -758,6 +764,13 @@ function logCard(t) {
       <td><span class="${g.w ? "rw" : "rl"}">${g.w ? "W" : "L"}</span> ${g.pf}-${g.pa}</td><td>${g.gnet == null ? "—" : (g.gnet >= 0 ? "+" : "") + g.gnet.toFixed(1)}</td></tr>`).join("")}</tbody></table></div></div>`;
 }
 </script>
-<script src="data/index.js"></script>
+<script>
+(function () {     // always fetch the latest schedule/team index (no stale browser copy)
+  const s = document.createElement("script");
+  s.src = "data/index.js?v=" + Math.floor(Date.now() / 60000);
+  s.onerror = () => { document.getElementById("view").innerHTML = '<div class="card empty">Couldn\'t load the data. Try refreshing.</div>'; };
+  document.head.appendChild(s);
+})();
+</script>
 </body>
 </html>
