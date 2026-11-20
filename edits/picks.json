@@ -1,0 +1,21 @@
+{
+ "pins": {
+  "378689": {
+   "g": {
+    "id": 378689,
+    "as": "houston",
+    "hs": "kansas",
+    "away": "Houston",
+    "home": "Kansas",
+    "start": "2026-11-20T04:00:00.000Z",
+    "neutral": true,
+    "conf": false,
+    "notes": "Players Era 8 - Championship",
+    "venue": "Michelob ULTRA Arena",
+    "city": "Las Vegas, NV"
+   },
+   "added": 1795150615048
+  }
+ },
+ "updated_at": "2026-11-20T04:56:55.048Z"
+}
