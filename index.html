@@ -521,11 +521,16 @@ function drawNews(g, A, H, n) {
   const body = $("#newsBody"); if (!body) return;
   const starred = !!STORE.pins[gkey(g)];
   const item = x => `${esc(x.text || "")}${x.source ? ` <span class="src">— ${esc(x.source)}${x.date ? ", " + esc(x.date) : ""}</span>` : ""}`;
-  const avail = x => `<b>${esc(x.player || "")}</b>${x.status ? ` <span class="nflag injury">${esc(x.status)}</span>` : ""} ${esc(x.detail || "")}${x.source ? ` <span class="src">— ${esc(x.source)}${x.date ? ", " + esc(x.date) : ""}</span>` : ""}`;
+  const SHORT = /^(out|doubtful|questionable|probable|day-to-day|returning|available|unknown)$/i;
+  const avail = x => `<b>${esc(x.player || "")}</b>${x.status && SHORT.test(x.status.trim()) ? ` <span class="nflag ${/out|doubt/i.test(x.status) ? "injury" : ""}">${esc(x.status)}</span>` : x.status ? ` <i>${esc(x.status)}</i>` : ""} ${esc(x.detail || "")}${x.source ? ` <span class="src">— ${esc(x.source)}${x.date ? ", " + esc(x.date) : ""}</span>` : ""}`;
   let html = "";
+  if (n && typeof n.bottom_line === "string" && n.bottom_line.trim().startsWith("{")) {   // older recap that wasn't unpacked
+    try { Object.assign(n, JSON.parse(n.bottom_line)); } catch (e) { n.notes = n.notes || "This recap didn't format correctly; it will be cleaned up on the next run."; n.bottom_line = null; }
+  }
   if (n) {
     $("#newsCap").textContent = `News recap researched ${new Date(n.generated).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} from ${n.searches || "several"} web searches. Check the sources for anything that matters.`;
     if (n.bottom_line) html += `<p><b>Bottom line:</b> ${esc(n.bottom_line)}</p>`;
+    if (n.notes && !Object.keys(n.teams || {}).length) html += `<p class="cap">${esc(n.notes)}</p>`;
     html += `<div class="cols">${[A, H].map((t, i) => { const d = (n.teams || {})[t.team] || (n.teams || {})[i ? n.home : n.away] || {};
       return `<div><h4 class="${i ? "tagH" : "tagA"}">${esc(t.team)}</h4>
         <div class="small dim">Availability</div>${(d.availability || []).length ? `<ul class="narr news">${d.availability.map(x => `<li>${avail(x)}</li>`).join("")}</ul>` : '<p class="cap">Nothing reported.</p>'}
