@@ -1,5 +1,21 @@
 {
  "pins": {
+  "372871": {
+   "g": {
+    "id": 372871,
+    "as": "kentucky",
+    "hs": "indiana",
+    "away": "Kentucky",
+    "home": "Indiana",
+    "start": "2026-11-21T01:00:00.000Z",
+    "neutral": true,
+    "conf": false,
+    "notes": null,
+    "venue": "Lucas Oil Stadium",
+    "city": "Indianapolis, IN"
+   },
+   "added": 1795201855902
+  },
   "378689": {
    "g": {
     "id": 378689,
@@ -17,5 +33,5 @@
    "added": 1795150615048
   }
  },
- "updated_at": "2026-11-20T04:56:55.048Z"
+ "updated_at": "2026-11-20T19:10:55.902Z"
 }
