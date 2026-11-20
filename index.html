@@ -119,6 +119,15 @@ ul.narr li { margin: 3px 0; max-width: 90ch; }
 .empty { padding: 18px 16px; color: var(--ink-2); }
 .back { font: inherit; background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0; font-weight: 600; }
 footer { color: var(--ink-3); font-size: 12.5px; }
+.tlink { font: inherit; background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; text-decoration: underline; }
+.news li { margin: 4px 0; }
+.src { color: var(--ink-3); font-size: 12px; }
+.nflag { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; border-radius: 3px; padding: 0 5px; margin-right: 5px; background: var(--accent-soft); color: var(--accent); }
+.nflag.injury, .nflag.suspension { background: var(--lo); color: var(--cell-ink); }
+.analysis { margin: 0 0 10px; padding-left: 18px; }
+.analysis li { margin: 5px 0; max-width: 100ch; }
+.story p { margin: 2px 0 6px; max-width: 95ch; }
+.role { color: var(--ink-2); font-size: 13px; margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -136,7 +145,7 @@ footer { color: var(--ink-3); font-size: 12.5px; }
     </div>
   </div>
   <main id="view"><div class="card empty">Loading…</div></main>
-  <footer id="foot"></footer>
+  <footer><div id="sync"></div><div id="foot"></div></footer>
 </div>
 
 <script>
@@ -168,6 +177,76 @@ let STORE = {};
 try { STORE = JSON.parse(localStorage.getItem("cbbp") || "{}"); } catch (e) { STORE = {}; }
 STORE.pins = STORE.pins || {};
 function save() { try { localStorage.setItem("cbbp", JSON.stringify(STORE)); } catch (e) {} }
+const slugify = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+// ---- starred games sync: edits/picks.json in the GitHub repo (same sign-in as your other boards)
+const REPO = location.hostname.endsWith(".github.io") ? `${location.hostname.split(".")[0]}/${location.pathname.split("/").filter(Boolean)[0] || ""}` : "";
+const TOKEN_KEYS = ["cbb-gh-token", "nba-gh-token"];
+const token = () => { try { for (const k of TOKEN_KEYS) { const v = localStorage.getItem(k); if (v) return v; } } catch (e) {} return ""; };
+const b64 = str => { const by = new TextEncoder().encode(str); let s = ""; by.forEach(c => (s += String.fromCharCode(c))); return btoa(s); };
+const unb64 = b => new TextDecoder().decode(Uint8Array.from(atob(b.replace(/\s/g, "")), c => c.charCodeAt(0)));
+const PICKS_API = `https://api.github.com/repos/${REPO}/contents/edits/picks.json`;
+const ghHeaders = () => (token() ? { Authorization: `Bearer ${token()}`, Accept: "application/vnd.github+json" } : { Accept: "application/vnd.github+json" });
+const SYNC = { state: "", sha: null };
+async function remotePicks() {
+  const r = await fetch(PICKS_API + `?t=${Date.now()}`, { headers: ghHeaders(), cache: "no-store" });
+  if (r.status === 404) { SYNC.sha = null; return {}; }
+  if (r.ok) { const j = await r.json(); SYNC.sha = j.sha; return (JSON.parse(unb64(j.content)).pins) || {}; }
+  const p = await fetch(`edits/picks.json?t=${Date.now()}`, { cache: "no-store" });   // public copy, no token needed
+  if (p.ok) return (await p.json()).pins || {};
+  if (p.status === 404) return {};
+  throw new Error("unreachable");
+}
+async function pullPicks() {
+  if (!REPO) return;
+  try { STORE.pins = await remotePicks(); save(); updateCount(); SYNC.state = token() ? "synced" : "readonly"; }
+  catch (e) { SYNC.state = "offline"; }
+  renderSync();
+}
+const PRUNE_MS = 3 * 864e5;
+async function updatePicks(fn) {        // apply fn to the latest remote copy, then save it back
+  STORE.pins = fn(STORE.pins); save(); updateCount();
+  if (!REPO) return;
+  if (!token()) { SYNC.state = "signin"; renderSync(); return; }
+  for (let i = 0; i < 3; i++) {
+    try {
+      let pins = fn(await remotePicks());
+      for (const [k, v] of Object.entries(pins)) { const t = Date.parse(v.g && v.g.start); if (t && Date.now() - t > PRUNE_MS) delete pins[k]; }
+      const body = { message: "Starred games", content: b64(JSON.stringify({ pins, updated_at: new Date().toISOString() }, null, 1)) };
+      if (SYNC.sha) body.sha = SYNC.sha;
+      const r = await fetch(PICKS_API, { method: "PUT", headers: { ...ghHeaders(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (r.ok) { SYNC.sha = (await r.json()).content.sha; STORE.pins = pins; save(); updateCount(); SYNC.state = "synced"; renderSync(); return; }
+      if (r.status === 401 || r.status === 403 || r.status === 404) { SYNC.state = "token"; renderSync(); return; }
+    } catch (e) { SYNC.state = "offline"; }
+  }
+  renderSync();
+}
+function renderSync() {
+  const el = document.getElementById("sync"); if (!el) return;
+  const msg = { synced: "Stars sync across your devices (and tell the Mac which games get news recaps).",
+    readonly: "Signed out: stars stay on this device.", signin: "Stars stay on this device until you sign in.",
+    token: "GitHub didn't accept the token for the cbb-previews repo.", offline: "Couldn't reach GitHub; stars saved on this device for now." }[SYNC.state] || "";
+  el.innerHTML = REPO ? `${msg} ${token() ? '<button class="tlink" data-signout>Sign out</button>' : '<button class="tlink" data-signin>Sign in with your GitHub token</button>'}` : "Local preview: stars stay in this browser.";
+}
+document.addEventListener("click", e => {
+  const ds = e.target.dataset || {};
+  if ("signin" in ds) { const v = (prompt("Paste your GitHub token (it stays on this device):") || "").trim(); if (v) { try { localStorage.setItem("cbb-gh-token", v); } catch (x) {} location.reload(); } }
+  if ("signout" in ds) { try { localStorage.removeItem("cbb-gh-token"); } catch (x) {} location.reload(); }
+});
+CBBP._news = {};
+CBBP.news = d => { CBBP._news[slugify(d.key)] = d; (CBBP._newsWait[slugify(d.key)] || []).forEach(f => f(d)); };
+CBBP._newsWait = {};
+function loadNews(key) {
+  const k = slugify(key);
+  return new Promise(res => {
+    if (CBBP._news[k]) return res(CBBP._news[k]);
+    (CBBP._newsWait[k] = CBBP._newsWait[k] || []).push(res);
+    const s = document.createElement("script");
+    s.src = `data/news/${k}.js?v=${Date.now()}`;
+    s.onerror = () => res(null);
+    document.head.appendChild(s);
+  });
+}
 
 function pctColor(p) {
   if (p == null) return "transparent";
@@ -197,6 +276,8 @@ function boot() {
   document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => { location.hash = b.dataset.tab; });
   window.onhashchange = route;
   route();
+  renderSync();
+  pullPicks().then(() => { if ((location.hash || "").startsWith("#mine")) showMine(); });
 }
 function setTab(t) { document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === t)); updateCount(); }
 function updateCount() { const n = Object.keys(STORE.pins).length; $("#mycount").textContent = n ? `(${n})` : ""; }
@@ -219,9 +300,10 @@ function gameFromKey(key) {
 }
 const gkey = g => g.custom ? `${g.as}~${g.hs}~${g.neutral ? 1 : 0}` : String(g.id);
 function togglePin(g) {
-  const k = gkey(g);
-  if (STORE.pins[k]) delete STORE.pins[k]; else STORE.pins[k] = { g, added: Date.now() };
-  save(); updateCount();
+  const k = gkey(g), on = !STORE.pins[k];
+  const keep = { id: g.id, as: g.as, hs: g.hs, away: g.away, home: g.home, start: g.start, neutral: g.neutral, conf: g.conf,
+    notes: g.notes, venue: g.venue, city: g.city, custom: g.custom };
+  updatePicks(pins => { pins = { ...pins }; if (on) pins[k] = { g: keep, added: Date.now() }; else delete pins[k]; return pins; });
 }
 function localDay(iso) { const d = new Date(iso); return isNaN(d) ? "TBD" : d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }); }
 function localTime(iso) { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }); }
@@ -318,6 +400,8 @@ function bubbleSwing(opp, site) {   // site from the team's point of view: 1 hom
   const p = phi(m / I.sd);
   return { win: 1 - p, loss: -p };
 }
+const qrank = t => (CBBP.I.quad_source === "NET" && t.tv.net_rank) ? t.tv.net_rank : t.tv.rank;
+const qsrc = () => CBBP.I.quad_source === "NET" ? "NET" : "Torvik";
 function quad(rank, site) {
   const cuts = { 1: [30, 75, 160], 0: [50, 100, 200], "-1": [75, 135, 240] }[site];
   for (let i = 0; i < 3; i++) if (rank <= cuts[i]) return i + 1;
@@ -327,8 +411,8 @@ function stakes(g, A, H) {
   const out = [];
   const nm = t => esc(t.team);
   if (g.notes) out.push(`Event: ${esc(g.notes)}.`);
-  const confGame = g.conf || (A.tv.conf === H.tv.conf);
-  if (confGame) {
+  if (!g.conf && A.tv.conf === H.tv.conf) out.push(`${esc(A.tv.conf)} rivals meeting outside league play: no conference-standings impact.`);
+  if (g.conf) {
     out.push(`${A.tv.conf} game: ${nm(A)} is ${A.record.cw}-${A.record.cl} in league play, ${nm(H)} ${H.record.cw}-${H.record.cl}.`);
   }
   const apNow = t => { const w = CBBP.lastApWeek; const r = t.ap.length ? t.ap[t.ap.length - 1] : null; return r && (w == null || r.week === w) ? r.rank : null; };
@@ -336,10 +420,10 @@ function stakes(g, A, H) {
   if (ra && rh) out.push(`Ranked showdown: No. ${ra} vs No. ${rh} in the AP poll.`);
   else if (ra || rh) out.push(`${ra ? nm(A) : nm(H)} (No. ${ra || rh} AP) puts its ranking on the line.`);
   for (const [t, o, site] of [[A, H, g.neutral ? 0 : -1], [H, A, g.neutral ? 0 : 1]]) {
-    const q = quad(o.tv.rank, String(site));
+    const q = quad(qrank(o), String(site));
     const sw = bubbleSwing(o, site);
     const qtxt = q === 1 ? `a Quadrant 1 chance` : q === 2 ? `a Quadrant 2 game` : q === 3 ? `a Quadrant 3 game, so a loss would hurt` : `a Quadrant 4 game, so a loss would be a résumé stain`;
-    out.push(`For ${nm(t)}: ${qtxt} (${nm(o)} is ${ord(o.tv.rank)} in Torvik${site === -1 ? ", on the road" : site === 1 ? ", at home" : ", neutral site"}). ` +
+    out.push(`For ${nm(t)}: ${qtxt} (${nm(o)} is ${ord(qrank(o))} in ${qsrc() === "NET" ? "the NET" : "Torvik"}${site === -1 ? ", on the road" : site === 1 ? ", at home" : ", neutral site"}). ` +
       `For a bubble-level team this game is worth <b>${sw.win >= 0 ? "+" : ""}${sw.win.toFixed(2)}</b> WAB with a win and <b>${sw.loss.toFixed(2)}</b> with a loss.`);
   }
   for (const t of [A, H]) {
@@ -404,19 +488,51 @@ async function showGame(g) {
 
   <div class="card"><header><h3>What's at stake</h3></header><div class="pad"><ul class="narr">${stakes(g, A, H).map(s => `<li>${s}</li>`).join("")}</ul></div></div>
 
+  <div class="card" id="newsCard"><header><h3>In the news</h3><span class="cap" id="newsCap"></span></header><div class="pad" id="newsBody"><p class="cap">Loading…</p></div></div>
+
   <div class="cols">${[A, H].map((t, i) => narrCard(t, i ? "tagH" : "tagA")).join("")}</div>
 
   <div class="card"><header><h3>Where it's decided</h3><span class="cap">Each offense against the defense it faces, by D1 percentile on both sides.</span></header>
     <div class="pad">${E.length ? E.slice(0, 8).map(e => `<div class="edge"><i style="background:${e.who === "clash" ? "var(--mid)" : ((e.side === "A") === (e.who === "O")) ? "var(--away)" : "var(--home)"}"></i><div>${e.text}</div></div>`).join("") : '<p class="cap">No big mismatches: these profiles line up evenly.</p>'}</div></div>
 
-  <div class="card"><header><h3>${esc(A.team)} offense vs ${esc(H.team)} defense</h3></header><div class="scroll pad">${sideTable(A, H)}</div></div>
-  <div class="card"><header><h3>${esc(H.team)} offense vs ${esc(A.team)} defense</h3></header><div class="scroll pad">${sideTable(H, A)}</div></div>
+  <div class="card"><header><h3>${esc(A.team)} offense vs ${esc(H.team)} defense</h3></header><div class="pad">${sideTable(A, H, g.neutral ? 0 : -1)}</div></div>
+  <div class="card"><header><h3>${esc(H.team)} offense vs ${esc(A.team)} defense</h3></header><div class="pad">${sideTable(H, A, g.neutral ? 0 : 1)}</div></div>
 
   <div class="cols">${[A, H].map((t, i) => keyPlayers(t, i ? "tagH" : "tagA")).join("")}</div>
   ${[A, H].map(t => rosterCard(t)).join("")}
   <div class="cols">${[A, H].map(t => logCard(t)).join("")}</div>`;
-  $("#pinB").onclick = () => { togglePin(g); $("#pinB").textContent = STORE.pins[gkey(g)] ? "★ In My games" : "☆ Add to My games"; };
+  $("#pinB").onclick = () => { togglePin(g); $("#pinB").textContent = STORE.pins[gkey(g)] ? "★ In My games" : "☆ Add to My games"; drawNews(g, A, H, null); };
   wireSort();
+  loadNews(gkey(g)).then(n => drawNews(g, A, H, n));
+}
+function headlineList(t, n = 6) {
+  const h = t.headlines && t.headlines.items || [];
+  if (!h.length) return "";
+  const when = d => { const x = new Date(d); return isNaN(x) ? "" : x.toLocaleDateString(undefined, { month: "short", day: "numeric" }); };
+  return `<ul class="narr news">${h.slice(0, n).map(i => `<li>${(i.flags || []).map(f => `<span class="nflag ${f}">${f}</span>`).join("")}<a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.title)}</a> <span class="src">${esc(i.source || "")} ${when(i.date)}</span></li>`).join("")}</ul>`;
+}
+function drawNews(g, A, H, n) {
+  const body = $("#newsBody"); if (!body) return;
+  const starred = !!STORE.pins[gkey(g)];
+  const item = x => `${esc(x.text || "")}${x.source ? ` <span class="src">— ${esc(x.source)}${x.date ? ", " + esc(x.date) : ""}</span>` : ""}`;
+  const avail = x => `<b>${esc(x.player || "")}</b>${x.status ? ` <span class="nflag injury">${esc(x.status)}</span>` : ""} ${esc(x.detail || "")}${x.source ? ` <span class="src">— ${esc(x.source)}${x.date ? ", " + esc(x.date) : ""}</span>` : ""}`;
+  let html = "";
+  if (n) {
+    $("#newsCap").textContent = `News recap researched ${new Date(n.generated).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} from ${n.searches || "several"} web searches. Check the sources for anything that matters.`;
+    if (n.bottom_line) html += `<p><b>Bottom line:</b> ${esc(n.bottom_line)}</p>`;
+    html += `<div class="cols">${[A, H].map((t, i) => { const d = (n.teams || {})[t.team] || (n.teams || {})[i ? n.home : n.away] || {};
+      return `<div><h4 class="${i ? "tagH" : "tagA"}">${esc(t.team)}</h4>
+        <div class="small dim">Availability</div>${(d.availability || []).length ? `<ul class="narr news">${d.availability.map(x => `<li>${avail(x)}</li>`).join("")}</ul>` : '<p class="cap">Nothing reported.</p>'}
+        <div class="small dim">Storylines</div>${(d.storylines || []).length ? `<ul class="narr news">${d.storylines.map(x => `<li>${item(x)}</li>`).join("")}</ul>` : '<p class="cap">Nothing notable found.</p>'}</div>`; }).join("")}</div>`;
+    if ((n.game || []).length) html += `<h4>The game</h4><ul class="narr news">${n.game.map(x => `<li>${item(x)}</li>`).join("")}</ul>`;
+    if ((n.sources || []).length) html += `<details><summary class="small">Sources (${n.sources.length})</summary><ul class="narr news small">${n.sources.map(x => `<li><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title || x.url)}</a>${x.age ? ` <span class="src">${esc(x.age)}</span>` : ""}</li>`).join("")}</ul></details>`;
+  } else {
+    $("#newsCap").textContent = "";
+    html += `<p class="cap">${starred ? "A news recap for this game will be written on the next run of the Mac script (starred games, up to 4 days before tip)." : "Star this game (☆ Add to My games) to get a researched news recap on the next run of the Mac script."}</p>`;
+  }
+  const hl = [A, H].map((t, i) => { const l = headlineList(t); return l ? `<div><h4 class="${i ? "tagH" : "tagA"}">${esc(t.team)}: latest headlines</h4>${l}</div>` : ""; }).join("");
+  if (hl) html += `<div class="cols">${hl}</div>`;
+  body.innerHTML = html;
 }
 async function showTeam(slug) {
   setTab(null);
@@ -426,6 +542,7 @@ async function showTeam(slug) {
     <div class="card"><header><h2>${esc(T.team)}</h2><span class="cap">${esc(T.tv.conf)} · ${T.record.w}-${T.record.l} · ${ord(T.tv.rank)} in Torvik</span></header>
     <div class="scroll pad">${tape(T, null)}</div></div>
     ${narrCard(T, "tagA")}
+    ${headlineList(T, 10) ? `<div class="card"><header><h3>Latest headlines</h3><span class="cap">ESPN and Google News, past week. Flags are keyword-based.</span></header><div class="pad">${headlineList(T, 10)}</div></div>` : ""}
     <div class="card"><header><h3>Team profile</h3></header><div class="scroll pad">${profileTable(T)}</div></div>
     ${keyPlayers(T, "tagA")}${rosterCard(T)}${logCard(T)}`;
   wireSort();
@@ -434,9 +551,10 @@ function tape(A, H) {
   const rows = [["Torvik rank", t => ord(t.tv.rank)], ["Adj. offense", t => `${t.tv.adjoe} <span class="dim">(${ord(t.tv.o_rank)})</span>`],
     ["Adj. defense", t => `${t.tv.adjde} <span class="dim">(${ord(t.tv.d_rank)})</span>`], ["Adj. net", t => (t.tv.net >= 0 ? "+" : "") + t.tv.net],
     ["Tempo", t => `${t.tv.adjt} <span class="dim">(${ord(t.tv.t_rank)})</span>`], ["Record", t => `${t.record.w}-${t.record.l}${t.record.cw + t.record.cl ? ` (${t.record.cw}-${t.record.cl} conf)` : ""}`],
-    ["Q1 / Q2 record", t => `${t.qrec[1][0]}-${t.qrec[1][1]} / ${t.qrec[2][0]}-${t.qrec[2][1]}`],
+    [`Q1 / Q2 record (${CBBP.I.quad_source === "NET" ? "NET" : "Torvik as NET"})`, t => `${t.qrec[1][0]}-${t.qrec[1][1]} / ${t.qrec[2][0]}-${t.qrec[2][1]}`],
     ["WAB", t => t.tv.wab == null ? "—" : (t.tv.wab >= 0 ? "+" : "") + t.tv.wab.toFixed(2)],
     ["AP poll", t => { const r = t.ap.length ? t.ap[t.ap.length - 1] : null; return r && r.week === CBBP.lastApWeek ? "No. " + r.rank : "—"; }],
+    ["NCAA NET", t => t.tv.net_rank ? ord(t.tv.net_rank) : '<span class="dim">not out yet</span>'],
     ["Last season (Torvik)", t => t.tv.last_rank ? ord(t.tv.last_rank) : "—"],
     ["Returning minutes", t => t.ret == null ? "—" : Math.round(t.ret * 100) + "%"],
     ["Style", t => t.style.join(", ") || "—"]];
@@ -453,7 +571,80 @@ function narrCard(t, cls) {
     ${sec("How they've been playing", N.form)}${sec("What's driving it", N.drivers)}${sec("How the perception has changed", N.perception)}${sec("Season stakes", N.season_stakes)}
     <p class="cap small">${blend}</p></div></div>`;
 }
-function sideTable(O, D) {
+function sideAnalysis(O, D, oSite) {
+  const I = CBBP.I, S = CBBP.S, L = I.L_eff, hca = I.hca * oSite;
+  const v = (t, k) => t.profile[k] ? t.profile[k].v : null, pc = (t, k) => t.profile[k] ? t.profile[k].p : null;
+  const pct1 = x => (x * 100).toFixed(1) + "%";
+  const ordp = x => x == null ? "—" : ord(x);
+  const OT = `<b>${esc(O.team)}</b>`, DT = `<b>${esc(D.team)}</b>`, OTn = esc(O.team), DTn = esc(D.team);
+  const out = [];
+  const proj = O.tv.adjoe * D.tv.adjde / L + hca, diff = proj - O.tv.adjoe;
+  const dTier = r => r <= 10 ? "a top-10 defense" : r <= 25 ? "a top-25 defense" : r <= 75 ? "a good defense" : r <= 200 ? "a middle-of-the-pack defense" : "one of the weaker defenses in D1";
+  out.push(`<b>Scoring outlook:</b> ${OT} projects at <b>${proj.toFixed(1)}</b> points per 100 possessions, ${Math.abs(diff).toFixed(1)} ${diff < 0 ? "below" : "above"} its adjusted season mark (${O.tv.adjoe}, ${ord(O.tv.o_rank)} nationally). ${DT} is ${dTier(D.tv.d_rank)} (${ord(D.tv.d_rank)} in adjusted defense)${oSite ? `, and ${OTn} is ${oSite > 0 ? "at home" : "on the road"}` : ""}.`);
+  const efgE = expectVal(O, D, "o_efg", "d_efg");
+  if (efgE != null) {
+    let t = `<b>Shooting:</b> expect an eFG% around <b>${pct1(efgE)}</b> (${OTn} averages ${pct1(v(O, "o_efg"))}; ${DTn} allows ${pct1(v(D, "d_efg"))}).`;
+    const zones = [["o_rimr", "d_rimr", "o_rimp", "at the rim"], ["o_midr", "d_midr", "o_midp", "from mid-range"], ["o_3pr", "d_3pr", "o_3p", "from three"]];
+    const sh = zones.map(([ok, dk, mk, lab]) => ({ lab, mk, now: v(O, ok), e: expectVal(O, D, ok, dk) })).filter(x => x.now != null && x.e != null)
+      .map(x => ({ ...x, d: x.e - x.now })).sort((a, b) => Math.abs(b.d) - Math.abs(a.d));
+    const z = sh[0];
+    if (z && Math.abs(z.d) >= 0.03) {
+      const mp = pc(O, z.mk);
+      const tail = mp == null ? "" : z.d > 0 ? (mp >= 60 ? `, and that's a shot ${OTn} makes (${ord(mp)} pct accuracy)` : `, not a strength for them (${ord(mp)} pct accuracy)`)
+        : (mp >= 60 ? `, taking away a shot ${OTn} makes well (${ord(mp)} pct accuracy)` : `, which costs them little (${ord(mp)} pct accuracy)`);
+      t += ` The shot diet should shift: ${DTn}'s defense pushes the share of ${OTn}'s shots ${z.lab} ${z.d > 0 ? "up" : "down"} from ${pct1(z.now)} to about ${pct1(z.e)}${tail}.`;
+    }
+    out.push(t);
+  }
+  const r3 = pc(O, "o_3pr"), a3 = pc(D, "d_3pr"), e3 = expectVal(O, D, "o_3pr", "d_3pr");
+  if (r3 != null && a3 != null && e3 != null) {
+    out.push(`<b>Three-point battle:</b> ${OTn} takes ${pct1(v(O, "o_3pr"))} of its shots from three (${ord(r3)} pct for volume) and hits ${pct1(v(O, "o_3p"))} (${ordp(pc(O, "o_3p"))} pct). ${DTn} ${a3 >= 70 ? "limits" : a3 <= 30 ? "gives up lots of" : "allows a fairly normal share of"} threes (${pct1(v(D, "d_3pr"))} of opponents' shots), so expect a 3PA share near ${pct1(e3)}. ${DTn}'s 3P% allowed (${pct1(v(D, "d_3p"))}) swings a lot on luck; the attempt numbers are the better guide.`);
+  }
+  const toE = expectVal(O, D, "o_to", "d_to"), orE = expectVal(O, D, "o_orb", "d_orb");
+  const poss = O.tv.adjt * D.tv.adjt / I.L_tempo;
+  if (toE != null && orE != null) {
+    const dTO = (toE - v(O, "o_to")) * poss, mOR = orE - v(O, "o_orb");
+    out.push(`<b>Possession battle:</b> expected turnover rate ${pct1(toE)} (${OTn}'s norm ${pct1(v(O, "o_to"))}) and offensive rebound rate ${pct1(orE)} (norm ${pct1(v(O, "o_orb"))}). Over about ${poss.toFixed(0)} possessions that's roughly ${Math.abs(dTO).toFixed(1)} ${dTO > 0 ? "more" : "fewer"} turnovers than usual${Math.abs(mOR) >= 0.02 ? `, with ${mOR > 0 ? "more" : "fewer"} second chances than ${OTn} usually gets` : ""}.`);
+  }
+  const ftE = expectVal(O, D, "o_ftr", "d_ftr");
+  if (ftE != null) {
+    const fp = pc(O, "o_ft");
+    out.push(`<b>At the line:</b> expected FT rate ${pct1(ftE)} (${OTn} usually ${pct1(v(O, "o_ftr"))}; ${DTn} allows ${pct1(v(D, "d_ftr"))}).${v(O, "o_ft") != null ? ` ${OTn} shoots ${pct1(v(O, "o_ft"))} on free throws (${ordp(fp)} pct)${fp != null && fp <= 25 && ftE >= 0.35 ? ", so trips to the line won't be automatic points" : ""}.` : ""}`);
+  }
+  const keys = O.players.filter(p => p.key && p.shares && p.skills), watch = [];
+  const dRim = pc(D, "d_rimp"), dRimR = pc(D, "d_rimr"), d3r = pc(D, "d_3pr"), dOrb = pc(D, "d_orb"), dFt = pc(D, "d_ftr");
+  const best = (arr, f) => arr.slice().sort((a, b) => f(b) - f(a))[0];
+  if ((dRim != null && dRim <= 35) || (dRimR != null && dRimR <= 35)) {
+    const p = best(keys.filter(p => (p.skills.rim_pct || 0) >= 60), p => p.shares.rim * p.shares.fga);
+    if (p) watch.push(`${esc(p.name)} (${Math.round(p.shares.rim * 100)}% of his shots at the rim, ${ord(p.skills.rim_pct)} pct finisher) against a defense that's soft inside`);
+  }
+  if (d3r != null && d3r <= 35) {
+    const p = best(keys.filter(p => (p.skills.fg3_pct || 0) >= 60), p => p.shares.three * p.shares.fga);
+    if (p) watch.push(`${esc(p.name)} (${Math.round(p.shares.three * 100)}% of his shots from three, ${ord(p.skills.fg3_pct)} pct shooter) against a defense that allows lots of threes`);
+  }
+  if (dOrb != null && dOrb <= 35) {
+    const p = best(keys.filter(p => (p.skills.orb || 0) >= 75), p => p.skills.orb);
+    if (p) watch.push(`${esc(p.name)} on the offensive glass (${ord(p.skills.orb)} pct) against a defense that gives up second chances`);
+  }
+  if (dFt != null && dFt <= 35) {
+    const p = best(keys.filter(p => (p.skills.ftr || 0) >= 75), p => p.skills.ftr);
+    if (p) watch.push(`${esc(p.name)} drawing fouls (${ord(p.skills.ftr)} pct) against a defense that sends teams to the line`);
+  }
+  if (dRim != null && dRim >= 85) {
+    const p = best(keys.filter(p => p.shares.rim >= 0.45), p => p.shares.rim * p.shares.fga);
+    if (p) watch.push(`a tough draw for ${esc(p.name)}, who takes ${Math.round(p.shares.rim * 100)}% of his shots at the rim, against elite rim protection (${ord(dRim)} pct)`);
+  }
+  const seen = new Set(), uniq = watch.filter(w => { const n = w.replace(/^a tough draw for /, "").split(/[ (,]/).slice(0, 2).join(" "); if (seen.has(n)) return false; seen.add(n); return true; });
+  if (uniq.length) out.push(`<b>Players to watch:</b> ${uniq.slice(0, 3).join("; ")}.`);
+  return out;
+}
+function expectVal(O, D, ok, dk) {
+  const a = O.profile[ok], b = D.profile[dk], m = CBBP.S[dk] && CBBP.S[dk].avg;
+  if (!a || !b || a.v == null || b.v == null || m == null) return null;
+  return Math.max(0, a.v + b.v - m);
+}
+
+function sideTable(O, D, oSite) {
   const S = CBBP.S, rows = [];
   let grp = null;
   const ORDER = [["Core", "o_eff", "d_eff"], ["Core", "tempo", "tempo"],
@@ -463,13 +654,19 @@ function sideTable(O, D) {
     ["Shot-making", "o_blkd", "d_blk"], ["Shot-making", "o_ft", null]];
   for (const [g, ok, dk] of ORDER) {
     const so = ok && S[ok], sd = dk && S[dk];
-    if (g !== grp) { rows.push(`<tr class="grp"><td colspan="6">${g}</td></tr>`); grp = g; }
+    if (g !== grp) { rows.push(`<tr class="grp"><td colspan="7">${g}</td></tr>`); grp = g; }
     const o = ok ? O.profile[ok] : null, d = dk ? D.profile[dk] : null;
+    let e = "";
+    if (ok === "o_eff") e = (O.tv.adjoe * D.tv.adjde / CBBP.I.L_eff + CBBP.I.hca * oSite).toFixed(1);
+    else if (ok === "tempo") e = (O.tv.adjt * D.tv.adjt / CBBP.I.L_tempo).toFixed(1);
+    else if (ok && dk && !["o_blkd"].includes(ok)) { const x = expectVal(O, D, ok, dk); if (x != null) e = fmt(ok, x); }
     rows.push(`<tr><td class="l">${so ? so.label : "—"}</td><td>${o ? fmt(ok, o.v) : ""}</td><td>${o ? pcell(o.p, so.better === null) : ""}</td>
-      <td class="l">${sd ? sd.label : ""}</td><td>${d ? fmt(dk, d.v) : ""}</td><td>${d ? pcell(d.p, sd.better === null) : ""}</td></tr>`);
+      <td class="l">${sd ? sd.label : ""}</td><td>${d ? fmt(dk, d.v) : ""}</td><td>${d ? pcell(d.p, sd.better === null) : ""}</td><td><b>${e}</b></td></tr>`);
   }
-  return `<table><thead><tr><th class="l">${esc(O.team)} offense</th><th></th><th>Pct</th><th class="l">${esc(D.team)} defense</th><th></th><th>Pct</th></tr></thead><tbody>${rows.join("")}</tbody></table>
-    <p class="cap small">Pct = D1 percentile, 100 = best for that side (for the defense, best = allows the least). Grey cells are style, not good or bad: they show how much, from low to high.</p>`;
+  return `<ul class="analysis">${sideAnalysis(O, D, oSite).map(x => `<li>${x}</li>`).join("")}</ul>
+    <div class="scroll"><table><thead><tr><th class="l">${esc(O.team)} offense</th><th></th><th>Pct</th><th class="l">${esc(D.team)} defense</th><th></th><th>Pct</th><th>Expect</th></tr></thead><tbody>${rows.join("")}</tbody></table></div>
+    <p class="cap small">Pct = D1 percentile, 100 = best for that side (for the defense, best = allows the least). Grey cells are style, not good or bad: they show how much, from low to high.
+    Expect = what this matchup points to: the offense's number plus how far the defense sits from the D1 average (efficiency and tempo from Torvik's ratings, with home court).</p>`;
 }
 function profileTable(T) {
   const S = CBBP.S;
@@ -499,7 +696,14 @@ function playerBody(p) {
     ${p.career.map(c => `<tr><td class="l">${c.season}</td><td class="l">${esc(c.team)} <span class="dim">${esc(c.conf)}</span></td><td>${esc(c.cls || "")}</td><td>${v(c.gp, 0)}</td><td>${v(c.min)}</td><td>${v(c.pts)}</td><td>${v(c.reb)}</td><td>${v(c.ast)}</td><td>${v(c.ortg, 0)}</td><td>${v(c.usg)}</td><td>${v(c.ts)}</td><td>${c.fg3}</td><td>${v(c.bpm)}</td></tr>`).join("")}</tbody></table></div>` : "";
   const form = p.form.length ? `<div class="scroll"><table><thead><tr><th class="l">Date</th><th class="l">Opp</th><th>Min</th><th>Pts</th><th>Reb</th><th>Ast</th><th>FG</th><th>3P</th><th>FT</th><th>TO</th></tr></thead><tbody>
     ${p.form.map(f => `<tr><td class="l">${f.date.slice(5)}</td><td class="l">${esc(f.opp)}</td><td>${f.min}</td><td>${f.pts}</td><td>${f.reb}</td><td>${f.ast}</td><td>${f.fg}</td><td>${f.fg3}</td><td>${f.ft}</td><td>${f.tov}</td></tr>`).join("")}</tbody></table></div>` : "";
+  const st = p.story || {};
+  const chip = (x, cls) => `<span class="chip ${cls}">${esc(x.text)} · ${esc(x.label)} ${esc(x.val)} · ${Math.round(x.p)}</span>`;
+  const storyHtml = st.role ? `<div class="story"><h4>Role and game</h4><p>${esc(st.role)}</p>
+      ${(st.good || []).length || (st.bad || []).length ? `<div class="chips">${(st.good || []).map(x => chip(x, "good")).join("")}${(st.bad || []).map(x => chip(x, "bad")).join("")}</div>
+      <p class="cap small">Percentiles vs. D1 rotation players (blended with last season early on). Weak spots only show where they matter for his role.</p>` : ""}
+      ${st.scoring ? `<p><b>How he scores:</b> ${esc(st.scoring)}</p>` : ""}${st.form ? `<p><b>Form:</b> ${esc(st.form)}</p>` : ""}${st.change ? `<p><b>Change:</b> ${esc(st.change)}</p>` : ""}</div>` : "";
   return `<div class="body">
+    ${storyHtml}
     <h4>Background</h4>
     <div class="kv">${cell("Class", esc(p.cls || "—"))}${cell("Height", esc(p.ht || "—"))}${cell("Age", p.age ?? "—")}${tcell("Hometown", esc(p.home || "—"))}${rec}
       ${tcell("College path", p.path.map(x => esc(x.team)).join(" → ") || "—")}${cell("First D1 season", p.first_d1 || "—")}</div>
@@ -519,12 +723,13 @@ function playerSummary(p) {
   const flags = [p.transfer ? '<span class="flag">Transfer</span>' : "", p.newcomer && !p.transfer && p.cls === "Fr" ? '<span class="flag">Freshman</span>' : "",
     p.missed ? `<span class="flag out">Missed last ${p.missed > 1 ? p.missed + " games" : "game"}</span>` : ""].join("");
   return `<summary><div><div class="who">${p.num != null ? `<span class="dim">#${p.num}</span> ` : ""}${esc(p.name)}${flags}</div>
-      <div class="bg">${[p.cls, p.ht, p.role].filter(Boolean).map(esc).join(" · ")}${p.bg ? " — " + esc(p.bg) : ""}</div></div>
+      <div class="bg">${[p.cls, p.ht, p.role].filter(Boolean).map(esc).join(" · ")}${p.bg ? " — " + esc(p.bg) : ""}</div>
+      ${p.story && p.story.good && p.story.good.length ? `<div class="role">Best at: ${p.story.good.slice(0, 3).map(x => esc(x.text)).join(", ")}</div>` : ""}</div>
     <div class="line">${p.pts ?? "—"} pts · ${p.reb ?? "—"} reb · ${p.ast ?? "—"} ast<br><span class="dim">${p.mpg ?? "—"} min · BPM ${p.blend.bpm == null ? "—" : p.blend.bpm.toFixed(1)}</span></div></summary>`;
 }
 function keyPlayers(t, cls) {
   const key = t.players.filter(p => p.key);
-  return `<div class="card"><header><h3 class="${cls}">${esc(t.team)}: key players</h3><span class="cap">Ranked by impact (BPM × share of minutes). Tap for background and advanced stats.</span></header>
+  return `<div class="card"><header><h3 class="${cls}">${esc(t.team)}: key players</h3><span class="cap">Ranked by impact (BPM × share of minutes). Tap for role, strengths, background and advanced stats.</span></header>
     ${key.map(p => `<details class="pl">${playerSummary(p)}${playerBody(p)}</details>`).join("") || '<div class="empty">No player data yet.</div>'}</div>`;
 }
 function rosterCard(t) {
